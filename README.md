@@ -96,4 +96,4 @@ Eight tests, using invented logs and obviously fake keys: redaction of secrets, 
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](LICENSE). Anyone who uses or builds on this work must keep the [NOTICE](NOTICE) file and credit Vidwaan Singhania.
