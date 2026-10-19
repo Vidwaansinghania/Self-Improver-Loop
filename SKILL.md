@@ -1,6 +1,6 @@
 ---
-name: self-improver-loop
-description: "Reviews the user's recent AI coding sessions from their local logs and reports what the assistant keeps getting wrong, work they keep redoing by hand that should become a skill or a script, rules worth adding to the project's instructions file or memory, and skills or rules that have gone stale. Each review also checks whether the changes applied last time stopped the problem. Use when the user asks to review their sessions, review how the assistant has been doing, improve their setup, find what keeps going wrong, or run the self improver loop. Report only: nothing changes until the user picks recommendations."
+name: self-improve-suggestions
+description: "Reviews the user's recent AI coding sessions from their local logs and reports what the assistant keeps getting wrong, work they keep redoing by hand that should become a skill or a script, rules worth adding to the project's instructions file or memory, and skills or rules that have gone stale. Each review also checks whether the changes applied last time stopped the problem. Use when the user asks to review their sessions, review how the assistant has been doing, improve their setup, find what keeps going wrong, or invokes /self-improve-suggestions. Report only: nothing changes until the user picks recommendations."
 ---
 
 You are reviewing how the user and their AI assistant have been working together, to find the few changes that would save the most correcting and repeating.

@@ -54,7 +54,7 @@ Redaction is pattern-based, so it can miss a secret in an unusual format. Skim t
 
 | Where you run it | How |
 |---|---|
-| An agent that reads skills folders (Claude Code, OpenAI Codex, Gemini CLI, GitHub Copilot, Cursor and the others listed at [agentskills.io](https://agentskills.io)) | Clone this repo into the agent's skills folder as `self-improver-loop`, for example `git clone https://github.com/Vidwaansinghania/Self-Improver-Loop.git ~/.claude/skills/self-improver-loop`. Each agent documents its own folder. |
+| An agent that reads skills folders (Claude Code, OpenAI Codex, Gemini CLI, GitHub Copilot, Cursor and the others listed at [agentskills.io](https://agentskills.io)) | Clone this repo into the agent's skills folder as `self-improve-suggestions`, for example `git clone https://github.com/Vidwaansinghania/Self-Improver-Loop.git ~/.claude/skills/self-improve-suggestions`. Each agent documents its own folder. |
 | An agent with a different log format | Same install, then adapt `read_session()` in `scripts/digest.py` to read your agent's logs, or convert them to Claude Code's JSONL shape and pass the folder with `--logs`. |
 
 ## Using it
@@ -62,7 +62,7 @@ Redaction is pattern-based, so it can miss a secret in an unusual format. Skim t
 From the project you want reviewed:
 
 ```
-Run the self improver loop on this project.
+Run /self-improve-suggestions on this project.
 ```
 
 Running the digest on its own:
