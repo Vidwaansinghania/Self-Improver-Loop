@@ -8,8 +8,9 @@ slash commands and skills used, and which project folders each session touched.
 Scheduled-task runs are counted separately, since their first message is a stored
 prompt, not a request.
 
-Read-only on the logs. Standard library only. Secrets, emails and home-directory paths
-are redacted before anything is written.
+Read-only on the logs. Standard library only. Secrets, emails, IDs, phone numbers,
+long numbers, home-directory paths and the people listed in names.txt are redacted
+before anything is written.
 
   python digest.py                     # this project, since the last --mark (7 days the first time)
   python digest.py --days 30           # a fixed window
@@ -17,6 +18,16 @@ are redacted before anything is written.
   python digest.py --all-projects      # every project in the log folder
   python digest.py --mark              # record now as the last review
   python digest.py --project PATH      # a project other than the current folder
+  python digest.py --parts 3           # allow up to three digest files
+  python digest.py --max-chars 80000   # change the size of each file
+
+Each digest file holds up to 60,000 characters, so one read covers it. A normal run
+writes one (digest.md). A first run, with no review recorded yet, writes up to five
+(digest.md, digest-2.md, ...), oldest sessions first. Sessions that still don't fit
+are named in a note at the top of digest.md.
+
+names.txt in the workspace folder lists people to hide, one per line, spellings of
+the same person split by |. Each becomes Person A, Person B, ... in every session.
 
 Other agents: only the log reader is specific to Claude Code. Point --logs at a folder
 of Claude Code style .jsonl files, or adapt read_session() to your agent's log format.
@@ -30,20 +41,32 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-MAX_CHARS = 60_000     # fits in one read
+MAX_CHARS = 60_000     # one digest file; fits in one read
+FIRST_RUN_PARTS = 5    # no review recorded yet: up to five files, oldest sessions first
 SIGNAL_SHARE = 0.45    # share of the budget for the summary sections
 FIRST_CHARS = 600
 FOLLOW_CHARS = 300
 FOLLOW_MAX = 10
 SKIP_RECENT_S = 120    # a log written in the last two minutes is the session running now
 
-CORRECTION = re.compile(
-    r"(^|[.!?]\s+)no\b|\bnope\b|\bwrong\b|\bincorrect\b|\bnot what i\b|\bthat'?s not\b|\bi said\b|"
-    r"\bi told you\b|\bi asked\b|\bi already\b|\byou forgot\b|\byou missed\b|\byou didn'?t\b|"
-    r"\bwhy did you\b|\bwhy are you\b|\bwhy is\b|\bstop\b|\bdon'?t\b|\bdo not\b|\bundo\b|\brevert\b|"
-    r"\bredo\b|\bagain\b|\bstill\b|\bdoesn'?t work\b|\bnot working\b|\bbroken\b|\binstead\b|"
-    r"\bactually\b|\bshould have\b|\bshouldn'?t\b|\bnever\b|\bwhere is\b|\bmissing\b",
+# Corrections in two tiers. Strong phrases count anywhere in a follow-up. Weak words also turn up in
+# ordinary requests ("do the same again for X", "also, don't forget Y"), so they count only as the
+# opening word of a message, where a correction usually starts.
+CORRECTION_STRONG = re.compile(
+    r"\bnope\b|\bwrong\b|\bincorrect\b|\bnot what i\b|\bthat'?s not (what|right|it)\b|\bi said\b|"
+    r"\bi told you\b|\bi already (said|told|asked)\b|\byou forgot\b|\byou missed\b|\byou didn'?t\b|"
+    r"\bwhy did you\b|\bwhy are you\b|\bundo\b|\brevert\b|\bdoesn'?t work\b|\bnot working\b|"
+    r"\bshould(n'?t)? have\b|\bstill (not|doesn'?t|don'?t|isn'?t|aren'?t|wrong|broken)\b|"
+    r"\b(is|are|it'?s) (still )?broken\b",
     re.I)
+CORRECTION_WEAK = re.compile(
+    r"^(?:(?:ok(?:ay)?|hmm+|wait|um+)[,.]?\s+)?"
+    r"(no|stop|wait|actually|again|still|instead|redo|why is|why does|where is|where'?s|don'?t|do not|never)\b",
+    re.I)
+
+
+def reads_as_correction(msg):
+    return bool(CORRECTION_STRONG.search(msg[:250]) or CORRECTION_WEAK.search(msg))
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 
 # Things that must never reach the digest. Specific shapes first, generic ones last.
@@ -62,6 +85,31 @@ KEYWORD_VALUE = re.compile(
     r"(\s*[:=]\s*|\s+)([\"']?)[^\s\"']{6,}")
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 LONG_TOKEN = re.compile(r"\b[A-Za-z0-9_-]{40,}\b")
+# Identifiers that don't help explain a pattern: session and request IDs, hashes, account and
+# order numbers, phone numbers. Dates, times, decimals and comma-grouped figures are left alone.
+IDENTIFIERS = [
+    (UUID, "<id>"),
+    (re.compile(r"\b(?=[A-Za-z_]*\d)(?=\d*[A-Za-z])[A-Za-z0-9_]{16,}\b"), "<id>"),
+    (re.compile(r"\+\d{1,3}[\s.-]?\d[\d\s.-]{7,13}\d\b"), "<phone>"),
+    (re.compile(r"(?<!\d)\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?!\d)"), "<phone>"),
+    (re.compile(r"(?<![\d.,])\d{7,}(?![\d.,]*\d)"), "<number>"),
+]
+NAMES = []   # (pattern, placeholder) pairs from names.txt, set in main()
+
+
+def load_names(path):
+    """One person per line, spellings of the same person split by |. Each person gets the same
+    placeholder everywhere (Person A, Person B, ...), so a recurring person still shows up as
+    recurring without their name in the digest."""
+    pairs = []
+    if path.exists():
+        people = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines()
+                  if ln.strip() and not ln.lstrip().startswith("#")]
+        for i, line in enumerate(people):
+            tag = "Person " + (chr(65 + i) if i < 26 else str(i + 1))
+            pairs += [(v.strip(), tag) for v in line.split("|") if v.strip()]
+    pairs.sort(key=lambda p: -len(p[0]))   # "Jane Doe" before "Jane"
+    return [(re.compile(r"(?i)(?<!\w)" + re.escape(v) + r"(?!\w)"), tag) for v, tag in pairs]
 
 
 def redact(s):
@@ -74,6 +122,10 @@ def redact(s):
     home = str(Path.home())
     for h in {home, home.replace("\\", "/")}:
         s = re.sub(re.escape(h), lambda m: "~", s, flags=re.I)
+    for rx, tag in IDENTIFIERS:
+        s = rx.sub(tag, s)
+    for rx, tag in NAMES:
+        s = rx.sub(tag, s)
     return s
 
 
@@ -268,6 +320,8 @@ def main():
                     help="folder holding one sub-folder of .jsonl logs per project")
     ap.add_argument("--workspace", type=Path,
                     help="where state, digest and reports live (default: <project>/.self-improver)")
+    ap.add_argument("--max-chars", type=int, help="size of each digest file (default 60,000)")
+    ap.add_argument("--parts", type=int, help="most digest files to write (default 1, or 5 on a first run)")
     a = ap.parse_args()
 
     project = a.project.resolve()
@@ -280,8 +334,14 @@ def main():
         state["last_review"] = time.time()
         state_file.write_text(json.dumps(state), encoding="utf-8")
         digest_file.unlink(missing_ok=True)
+        for part in work.glob("digest-*.md"):
+            part.unlink()
         print("Last review recorded:", time.strftime("%Y-%m-%d %H:%M"))
         return
+    first_run = "last_review" not in state
+    part_size = a.max_chars or MAX_CHARS
+    max_parts = max(1, a.parts or (FIRST_RUN_PARTS if first_run else 1))
+    NAMES[:] = load_names(work / "names.txt")
     now = time.time()
     if a.since:
         since = datetime.fromisoformat(a.since).timestamp()
@@ -361,29 +421,65 @@ def main():
     out += [f"- ×{n} {e}" for e, n in errs.most_common(25) if n > 1] or ["- none"]
 
     out += ["", "## Follow-ups that read as corrections"]
-    corr = [(s, h) for s in live for h in s["humans"][1:] if CORRECTION.search(h[:250])]
+    corr = [(s, h) for s in live for h in s["humans"][1:] if reads_as_correction(h)]
     out += [f"- {stamp(s)} · {label(s)} → {clip(h, FOLLOW_CHARS)}" for s, h in corr[:60]] or ["- none"]
     if len(corr) > 60:
         out.append(f"- … {len(corr) - 60} more")
 
-    head = "\n".join(out)
-    head = head[: int(MAX_CHARS * SIGNAL_SHARE)]
+    head = redact("\n".join(out))
+    head_full = len(head)
+    head = head[: int(part_size * SIGNAL_SHARE)]
 
-    body = ["", "## Sessions (first message is the request; then your follow-ups)"]
+    NOTE_ROOM = 3_000  # kept free in digest.md for the notes at the top
+    parts = [head + "\n\n## Sessions (first message is the request; then your follow-ups)"]
+    cut = []
     for s in live:
         areas_s = ", ".join(k for k, _ in s["areas"].most_common(4)) or "no project files"
-        body.append(f"\n### {stamp(s)} · {label(s)} · {len(s['humans'])} msgs · {minutes(s)} min · "
-                    f"{len(s['errors'])} errors · {areas_s}")
+        block = [f"\n### {stamp(s)} · {label(s)} · {len(s['humans'])} msgs · {minutes(s)} min · "
+                 f"{len(s['errors'])} errors · {areas_s}"]
         for i, h in enumerate(s["humans"][: FOLLOW_MAX + 1]):
-            body.append(f"{'>' if i == 0 else '-'} {clip(h, FIRST_CHARS if i == 0 else FOLLOW_CHARS)}")
+            block.append(f"{'>' if i == 0 else '-'} {clip(h, FIRST_CHARS if i == 0 else FOLLOW_CHARS)}")
         if len(s["humans"]) > FOLLOW_MAX + 1:
-            body.append(f"- … {len(s['humans']) - FOLLOW_MAX - 1} more messages")
-    text = head + "\n".join(body)[: MAX_CHARS - len(head)]
+            block.append(f"- … {len(s['humans']) - FOLLOW_MAX - 1} more messages")
+        block = "\n" + "\n".join(block)
+        room = part_size - (NOTE_ROOM if len(parts) == 1 else 0)
+        if cut:
+            cut.append(s)   # once one session misses, later ones go too, so what's kept has no gaps
+        elif len(parts[-1]) + len(block) <= room:
+            parts[-1] += block
+        elif len(parts) < max_parts:
+            parts.append(f"# Session digest, part {len(parts) + 1}\n\n## Sessions, continued" + block)
+        else:
+            cut.append(s)
+
+    paths = [digest_file] + [work / f"digest-{i}.md" for i in range(2, len(parts) + 1)]
+    notes = []
+    if len(parts) > 1:
+        notes.append(f"> This digest is in {len(parts)} parts, oldest sessions first: "
+                     + ", ".join(p.name for p in paths) + ". Read every part before writing the report.")
+    if head_full > len(head):
+        notes.append(f"> Cut for length: the summary sections were trimmed from {head_full:,} to {len(head):,} chars.")
+    if cut:
+        names = "; ".join(f"{stamp(s)} · {label(s)}" for s in cut[:15])
+        more = f"; and {len(cut) - 15} more" if len(cut) > 15 else ""
+        notes.append(f"> Cut for length: {len(cut)} of {len(live)} sessions are missing from the Sessions section "
+                     f"(the most recent ones): {names}{more}. Rerun with a shorter --days or --since window, "
+                     f"or with more --parts, to see them.")
+    if notes:
+        parts[0] = "\n".join(notes) + "\n\n" + parts[0]
 
     work.mkdir(parents=True, exist_ok=True)
-    (work / ".gitignore").write_text("digest.md\nbackups/\n", encoding="utf-8")   # the digest holds your messages
-    digest_file.write_text(text, encoding="utf-8")
-    print(f"{len(live)} sessions and {len(tasks)} scheduled runs -> {digest_file} ({len(text):,} chars)")
+    # the digest holds your messages, and names.txt the people you hide
+    (work / ".gitignore").write_text("digest.md\ndigest-*.md\nnames.txt\nbackups/\n", encoding="utf-8")
+    for old in work.glob("digest-*.md"):   # parts left over from an earlier, longer run
+        old.unlink()
+    for path, text in zip(paths, parts):
+        path.write_text(text, encoding="utf-8")
+    print(f"{len(live)} sessions and {len(tasks)} scheduled runs -> "
+          + ", ".join(f"{p.name} ({len(t):,} chars)" for p, t in zip(paths, parts))
+          + f". File size {part_size:,}, up to {max_parts} file(s){', first run' if first_run else ''}.")
+    if cut:
+        print(f"{len(cut)} sessions cut for length; the note at the top of digest.md names them.")
 
 
 if __name__ == "__main__":

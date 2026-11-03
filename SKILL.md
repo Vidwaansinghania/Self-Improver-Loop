@@ -33,9 +33,13 @@ python SKILL_DIR/scripts/digest.py
 
 With no option it covers this project since the last review, or 7 days the first time. `--days 30` or `--since 2026-09-01` sets the window when the user names one. `--all-projects` reads every project in the log folder, which is worth doing when the same problem shows up in more than one repo.
 
-The script is read-only on the logs, uses only the standard library, skips subagent logs and the session running now, drops messages older than the window from resumed sessions, and redacts keys, tokens, emails and your home directory before writing anything. It writes `.self-improver/digest.md` in the project and adds a `.gitignore` there so the digest isn't committed.
+The script is read-only on the logs, uses only the standard library, skips subagent logs and the session running now, and drops messages older than the window from resumed sessions. Before writing anything it redacts keys, tokens, emails, session IDs and hashes, phone numbers, numbers of seven or more digits, and your home directory. People listed in `.self-improver/names.txt` (one per line, spellings of the same person split by `|`) become Person A, Person B and so on, the same letter in every session, so a recurring person still shows up as a pattern. Redaction is pattern-based, so it can miss a secret in an unusual format or a name not on the list.
 
-Read the digest in one go. Never read the raw `.jsonl` logs. If it found no sessions, say so in one line and stop.
+It writes `.self-improver/digest.md` in the project and adds a `.gitignore` there so the digest and `names.txt` aren't committed. Each digest file holds up to 60,000 characters. A normal run writes one; the first run, with no review recorded yet, writes up to five (`digest.md`, `digest-2.md` and on), oldest sessions first. `--parts` and `--max-chars` change the number and size of files.
+
+Read `digest.md`. If it opens with a note that it is in parts, read every part it names before Step 2. Never read the raw `.jsonl` logs. If it found no sessions, say so in one line and stop.
+
+If the digest opens with a "Cut for length" note, some sessions are missing. Say how many in the report's opening lines, and offer a rerun with a shorter window or more `--parts` if the missing ones could change the findings. Quote the digest as it stands: placeholders stay placeholders.
 
 What the digest holds, strongest signal first:
 
@@ -43,7 +47,7 @@ What the digest holds, strongest signal first:
 |---|---|
 | Interruptions and what you said next | The user stopped the assistant mid-task. The next message usually says why |
 | Declined tool calls | Actions the user refused |
-| Follow-ups that read as corrections | Matched on words like "no", "wrong", "I said", "again", "where is", "why did you", "stop". Loose on purpose, so most hits are ordinary follow-ups. Read each and keep only real corrections |
+| Follow-ups that read as corrections | Clear phrases ("wrong", "I said", "you forgot", "why did you", "undo") anywhere in a message, or words like "no", "actually", "again", "stop" when they open it. Some hits are still ordinary follow-ups. Read each and keep only real corrections |
 | Tool errors seen more than once | Environment problems the assistant keeps walking into |
 | Scheduled runs | Runs of stored tasks, counted apart from the user's own sessions |
 | Totals | Project folders touched, skills and slash commands used, installed skills not run |
@@ -132,7 +136,7 @@ Then record the review and delete the digest:
 python SKILL_DIR/scripts/digest.py --mark
 ```
 
-`--mark` stores the time of this review, so the next one starts from here, and removes `.self-improver/digest.md`.
+`--mark` stores the time of this review, so the next one starts from here, and removes `.self-improver/digest.md` and any `digest-N.md` parts.
 
 Step 6 — Apply, only when the user picks
 

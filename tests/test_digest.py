@@ -44,6 +44,36 @@ def test_home_directory_becomes_tilde():
     assert digest.redact(f"{home}/notes/a.md").startswith("~")
 
 
+def test_redacts_ids_phones_and_long_numbers_but_keeps_dates_and_figures():
+    out = digest.redact("session 3d361928-3001-4c85-bb81-442a7221d170, hash a1b2c3d4e5f6a7b8c9d0, "
+                        "account 12345678, call +1 250 555 0100 or (250) 555-0100")
+    assert "3d361928" not in out and "a1b2c3d4" not in out and "12345678" not in out and "555" not in out
+    assert out.count("<id>") == 2 and out.count("<phone>") == 2 and "<number>" in out
+    kept = "on 2026-11-02 at 09:58, revenue 1,250,000 and 12.5M, ratio 3.14159265, ticker RKLB"
+    assert digest.redact(kept) == kept
+
+
+def test_listed_names_become_consistent_placeholders():
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "names.txt"
+        f.write_text("# comment\nJane Doe | Jane\nSam Lee\n", encoding="utf-8")
+        digest.NAMES[:] = digest.load_names(f)
+        try:
+            out = digest.redact("Jane Doe said Jane would ask Sam Lee; Janet is someone else")
+        finally:
+            digest.NAMES[:] = []
+    assert out == "Person A said Person A would ask Person B; Janet is someone else"
+
+
+def test_corrections_need_a_clear_phrase_or_an_opening_word():
+    corrections = ["no, that's the wrong file", "you forgot the chart", "actually make it blue",
+                   "why did you delete that", "it still doesn't render", "hmm, don't use that font"]
+    ordinary = ["do the same again for the next file", "also, don't forget the sources",
+                "can you check whether anything is still missing", "great, now build the deck"]
+    assert all(digest.reads_as_correction(m) for m in corrections)
+    assert not any(digest.reads_as_correction(m) for m in ordinary)
+
+
 def test_project_slug_matches_claude_code_naming():
     assert digest.project_slug(r"C:\Users\Sam\My Project") == "C--Users-Sam-My-Project"
 
@@ -107,6 +137,38 @@ def test_digest_end_to_end():
         assert "digest.md" in ignore
 
 
+def build_many(root: Path, project: Path, n):
+    log_dir = root / "logs" / digest.project_slug(project)
+    log_dir.mkdir(parents=True)
+    old = time.time() - 3600
+    for k in range(n):
+        rows = [line("user", "2026-10-15T%02d:00:00Z" % (k % 24), f"Session {k} request " + "x" * 500),
+                line("user", "2026-10-15T%02d:01:00Z" % (k % 24), "and a follow-up " + "y" * 250)]
+        log = log_dir / f"s{k:02d}.jsonl"
+        log.write_text("\n".join(rows), encoding="utf-8")
+        os.utime(log, (old + k, old + k))
+    return root / "logs"
+
+
+def test_first_run_writes_parts_and_names_what_was_cut():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        project = root / "p"
+        project.mkdir()
+        logs = build_many(root, project, 30)
+        work = project / ".self-improver"
+        r = run_digest(project, logs, "--max-chars", "8000", "--parts", "2")
+        assert r.returncode == 0, r.stderr
+        first = (work / "digest.md").read_text(encoding="utf-8")
+        assert (work / "digest-2.md").exists() and not (work / "digest-3.md").exists()
+        assert first.startswith("> This digest is in 2 parts")
+        assert "Cut for length: 18 of 30 sessions" in first and "and 3 more" in first
+        assert "Session 12 request" in first                                   # the first session cut is named
+        assert "names.txt" in (work / ".gitignore").read_text(encoding="utf-8")
+        run_digest(project, logs, "--max-chars", "200000")                     # one file: the old part goes
+        assert not (work / "digest-2.md").exists()
+
+
 def test_mark_records_state_and_removes_digest():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -119,6 +181,7 @@ def test_mark_records_state_and_removes_digest():
         assert "Last review recorded" in r.stdout
         assert (project / ".self-improver" / "state.json").exists()
         assert not (project / ".self-improver" / "digest.md").exists()
+        assert not list((project / ".self-improver").glob("digest-*.md"))
 
 
 def test_missing_logs_give_a_clear_message():

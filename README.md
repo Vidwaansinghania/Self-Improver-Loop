@@ -36,11 +36,17 @@ Step 3 is what separates this from a one-off audit. A rule that was added and st
 The digest contains snippets of your own messages, so the script treats it as sensitive:
 
 - It runs only on your machine, reads the logs and never sends anything anywhere.
-- It redacts API keys, tokens, `password=` style values, private keys, emails and your home directory before writing.
-- It writes to `.self-improver/` inside your project with a `.gitignore` that excludes the digest and backups.
+- It redacts API keys, tokens, `password=` style values, private keys, emails, session IDs and hashes, phone numbers, numbers of seven or more digits, and your home directory before writing.
+- People you list in `.self-improver/names.txt` become Person A, Person B and so on, the same letter in every session. The report can still say the same person keeps coming up without naming them. One person per line, spellings split by `|`:
+
+  ```
+  Jane Doe | Jane | JD
+  ```
+
+- It writes to `.self-improver/` inside your project with a `.gitignore` that excludes the digest, `names.txt` and backups.
 - `--mark` deletes the digest at the end of each review.
 
-Redaction is pattern-based, so it can miss a secret in an unusual format. Skim the digest before sharing any of it.
+Redaction is pattern-based, so it can miss a secret in an unusual format or a name that isn't on your list. Skim the digest before sharing any of it.
 
 ## Requirements
 
@@ -73,7 +79,10 @@ python scripts/digest.py --days 30            # a fixed window
 python scripts/digest.py --since 2026-09-01   # from a date
 python scripts/digest.py --all-projects       # every project in the log folder
 python scripts/digest.py --mark               # record this review and delete the digest
+python scripts/digest.py --parts 3            # allow up to three digest files
 ```
+
+Each digest file holds up to 60,000 characters. A normal run writes one. The first run usually covers more history, so it writes up to five (`digest.md`, `digest-2.md` and on), oldest sessions first. If even that isn't enough, a note at the top of `digest.md` names the sessions left out.
 
 On Windows the command is usually `python` or `py` in place of `python3`.
 
@@ -85,12 +94,12 @@ Then reply with what you want applied: `apply 1, 3, 5`, `do 2`, `all`, or `park 
 python tests/test_digest.py
 ```
 
-Eight tests, using invented logs and obviously fake keys: redaction of secrets, emails and home paths, project folder naming, the digest sections end to end, the `--mark` step, and the message shown when no logs exist.
+Twelve tests, using invented logs and obviously fake keys: redaction of secrets, emails, IDs, phone numbers, long numbers, home paths and listed names; correction matching; project folder naming; the digest sections end to end; splitting into parts and naming what was cut; the `--mark` step; and the message shown when no logs exist.
 
 ## Limits
 
 - It sees what you typed and what the tools returned, not what you were thinking. A correction that never made it into chat doesn't appear.
-- The correction filter matches common words ("no", "again", "I said"), so many hits are ordinary follow-ups. The assistant reads each and keeps only the real ones.
+- The correction filter matches clear phrases ("wrong", "I said", "you forgot") anywhere, and words like "no", "actually" and "again" only when they open a message. Some hits are still ordinary follow-ups, so the assistant reads each and keeps only the real ones.
 - A pattern needs two occurrences. A new problem that happened once won't be reported yet.
 - Sessions older than your log retention are gone.
 
